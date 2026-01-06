@@ -1,73 +1,57 @@
 import streamlit as st
 import google.generativeai as genai
 
-# Sayfa Ayarları
-st.set_page_config(page_title="FLL Kural Asistanı", page_icon="🤖")
+st.set_page_config(page_title="FLL Asistanı", page_icon="🤖")
 st.title("🤖 FLL Submerged - Kural Asistanı")
 
-# 1. API KEY KONTROLÜ
+# 1. API KEY
 try:
     api_key = st.secrets["GOOGLE_API_KEY"]
     genai.configure(api_key=api_key)
 except Exception as e:
-    st.error("API Key hatası! Lütfen Streamlit Secrets ayarlarını kontrol edin.")
-    st.error(f"Hata detayı: {e}")
+    st.error("API Key hatası! Secrets ayarlarını kontrol et.")
     st.stop()
 
-# 2. MODEL AYARLARI (En kararlı sürümü kullanıyoruz)
-SYSTEM_PROMPT = """
-Sen uzman bir FLL Başhakemisin. 
-Soruları yanıtlarken FLL Robot Oyunu kural kitapçığını referans al.
-Daima nazik ve öğretici ol. Cevaplarında kural maddelerini (R12, M04 gibi) belirt.
-"""
+# 2. MODEL SEÇİMİ (EN GARANTİ YÖNTEM: 'gemini-pro')
+# 1.5-flash bazen bölge veya hesap türü nedeniyle görünmeyebilir.
+# 'gemini-pro' ise herkese açıktır.
+model_name = "gemini-pro"
 
-# Modeli oluştur
-model = genai.GenerativeModel(
-    model_name="gemini-1.5-flash", # "latest" yerine bunu kullanıyoruz
-    system_instruction=SYSTEM_PROMPT
-)
+# System Prompt'u eski modelde doğrudan mesaj geçmişine ekleyeceğiz
+SYSTEM_PROMPT = "Sen uzman bir FLL Başhakemisin. Soruları FLL Robot Oyunu kurallarına göre cevapla."
 
-# 3. SOHBET GEÇMİŞİ BAŞLATMA
+model = genai.GenerativeModel(model_name)
+
+# 3. SOHBET GEÇMİŞİ
 if "messages" not in st.session_state:
     st.session_state.messages = []
+    # Botun kimliğini en başa 'gizli' bir mesaj olarak ekliyoruz
+    st.session_state.messages.append({"role": "user", "content": SYSTEM_PROMPT})
+    st.session_state.messages.append({"role": "model", "content": "Anlaşıldı, FLL kurallarına göre yardımcı olmaya hazırım."})
 
-# Mesajları ekrana yazdır
-for message in st.session_state.messages:
+# Mesajları ekrana yaz (System prompt'u gizlemek için 2. mesajdan başlıyoruz)
+for message in st.session_state.messages[2:]:
     with st.chat_message(message["role"]):
         st.markdown(message["content"])
 
-# 4. KULLANICI GİRİŞİ VE CEVAP
-if prompt := st.chat_input("Sorunuzu buraya yazın..."):
-    # Kullanıcı mesajını ekle
+# 4. KULLANICI GİRİŞİ
+if prompt := st.chat_input("Sorunuzu sorun..."):
     st.session_state.messages.append({"role": "user", "content": prompt})
     with st.chat_message("user"):
         st.markdown(prompt)
 
-    # Bot cevabını üret
     with st.chat_message("assistant"):
         try:
-            # Sohbet geçmişini Gemini formatına çevir
-            # Hata çıkmaması için geçmişi temizleyip sadece son soruyu da gönderebiliriz
-            # Ama bağlamı korumak için şunu deniyoruz:
-            history_for_gemini = []
-            for m in st.session_state.messages[:-1]:
-                role = "user" if m["role"] == "user" else "model"
-                history_for_gemini.append({"role": role, "parts": [m["content"]]})
-
-            chat = model.start_chat(history=history_for_gemini)
+            # Sohbeti başlat
+            chat = model.start_chat(history=[
+                {"role": m["role"], "parts": [m["content"]]} 
+                for m in st.session_state.messages[:-1]
+            ])
             
-            # Cevabı al (stream=False yaptık hata ayıklamak daha kolay olsun diye)
             response = chat.send_message(prompt)
             st.markdown(response.text)
-            
-            # Geçmişe ekle
             st.session_state.messages.append({"role": "model", "content": response.text})
             
         except Exception as e:
-            # HATAYI BURADA YAKALAYIP EKRANA BASIYORUZ
-            st.error("Bir hata oluştu:")
-            st.code(e)
-            # Hata durumunda geçmişi temizlemek bazen kurtarıcı olur
-            if st.button("Sohbeti Sıfırla"):
-                st.session_state.messages = []
-                st.rerun()
+            st.error(f"Hata oluştu: {e}")
+            st.warning("Eğer '404' hatası devam ediyorsa, API Key'inizi yeniden oluşturmayı deneyin.")
