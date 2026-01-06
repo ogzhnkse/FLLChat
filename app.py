@@ -1,43 +1,37 @@
 import streamlit as st
 import google.generativeai as genai
-import os
 
 # Sayfa Ayarları
 st.set_page_config(page_title="FLL Kural Asistanı", page_icon="🤖")
-
-# Başlık
 st.title("🤖 FLL Submerged - Kural Asistanı")
-st.write("FLL kuralları ve görevleri hakkında sorularınızı sorun.")
 
-# 1. API KEY AYARI (Güvenlik için Secrets'tan çekeceğiz)
-# GitHub'a asla açık API Key yüklemeyin!
+# 1. API KEY KONTROLÜ
 try:
     api_key = st.secrets["GOOGLE_API_KEY"]
     genai.configure(api_key=api_key)
-except:
-    st.error("API Key bulunamadı! Lütfen Streamlit Secrets ayarlarını yapın.")
+except Exception as e:
+    st.error("API Key hatası! Lütfen Streamlit Secrets ayarlarını kontrol edin.")
+    st.error(f"Hata detayı: {e}")
     st.stop()
 
-# 2. MODEL VE TALİMATLAR
-# Buraya AI Studio'daki "System Instruction" metnini yapıştırın.
-# Eğer PDF kullandıysan, PDF içeriğini metne döküp buraya eklemek en garanti yoldur.
+# 2. MODEL AYARLARI (En kararlı sürümü kullanıyoruz)
 SYSTEM_PROMPT = """
-Sen uzman bir FIRST LEGO League (FLL) Başhakemisin. 
+Sen uzman bir FLL Başhakemisin. 
 Soruları yanıtlarken FLL Robot Oyunu kural kitapçığını referans al.
 Daima nazik ve öğretici ol. Cevaplarında kural maddelerini (R12, M04 gibi) belirt.
 """
 
-# Modeli Başlat
+# Modeli oluştur
 model = genai.GenerativeModel(
-    model_name="gemini-1.5-flash-latest",
+    model_name="gemini-1.5-flash", # "latest" yerine bunu kullanıyoruz
     system_instruction=SYSTEM_PROMPT
 )
 
-# 3. SOHBET GEÇMİŞİ YÖNETİMİ
+# 3. SOHBET GEÇMİŞİ BAŞLATMA
 if "messages" not in st.session_state:
     st.session_state.messages = []
 
-# Eski mesajları ekrana çiz
+# Mesajları ekrana yazdır
 for message in st.session_state.messages:
     with st.chat_message(message["role"]):
         st.markdown(message["content"])
@@ -51,21 +45,29 @@ if prompt := st.chat_input("Sorunuzu buraya yazın..."):
 
     # Bot cevabını üret
     with st.chat_message("assistant"):
-        message_placeholder = st.empty()
-        full_response = ""
-        
-        # Sohbet geçmişini modele gönder
-        chat = model.start_chat(history=[
-            {"role": m["role"], "parts": [m["content"]]} 
-            for m in st.session_state.messages[:-1]
-        ])
-        
-        response = chat.send_message(prompt, stream=True)
-        
-        # Akışkan (streaming) cevap efekti
-        for chunk in response:
-            full_response += chunk.text
-            message_placeholder.markdown(full_response + "▌")
-        message_placeholder.markdown(full_response)
-    
-    st.session_state.messages.append({"role": "model", "content": full_response})
+        try:
+            # Sohbet geçmişini Gemini formatına çevir
+            # Hata çıkmaması için geçmişi temizleyip sadece son soruyu da gönderebiliriz
+            # Ama bağlamı korumak için şunu deniyoruz:
+            history_for_gemini = []
+            for m in st.session_state.messages[:-1]:
+                role = "user" if m["role"] == "user" else "model"
+                history_for_gemini.append({"role": role, "parts": [m["content"]]})
+
+            chat = model.start_chat(history=history_for_gemini)
+            
+            # Cevabı al (stream=False yaptık hata ayıklamak daha kolay olsun diye)
+            response = chat.send_message(prompt)
+            st.markdown(response.text)
+            
+            # Geçmişe ekle
+            st.session_state.messages.append({"role": "model", "content": response.text})
+            
+        except Exception as e:
+            # HATAYI BURADA YAKALAYIP EKRANA BASIYORUZ
+            st.error("Bir hata oluştu:")
+            st.code(e)
+            # Hata durumunda geçmişi temizlemek bazen kurtarıcı olur
+            if st.button("Sohbeti Sıfırla"):
+                st.session_state.messages = []
+                st.rerun()
